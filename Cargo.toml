@@ -21,6 +21,10 @@ name = "chat"
 path = "src/chat.rs"
 
 [[bin]]
+name = "dcutr"
+path = "src/dcutr.rs"
+
+[[bin]]
 name = "main"
 path = "src/main.rs"
 

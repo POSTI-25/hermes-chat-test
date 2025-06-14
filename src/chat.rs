@@ -1,6 +1,3 @@
-
-
-
 use std::io::stdin;
 use std::{
     collections::hash_map::DefaultHasher,
