@@ -1,4 +1,3 @@
-use std::io::stdin;
 use std::{
     collections::hash_map::DefaultHasher,
     error::Error,
@@ -8,10 +7,9 @@ use std::{
 
 use futures::stream::StreamExt;
 use libp2p::{
-    gossipsub, noise,
-    relay,
-    swarm::{NetworkBehaviour, SwarmEvent},
-    tcp, yamux, Multiaddr, PeerId,
+    gossipsub, noise, relay,
+    swarm::{NetworkBehaviour, Swarm, SwarmEvent},
+    tcp, yamux, Multiaddr,
 };
 use tokio::{io, io::AsyncBufReadExt, select};
 use tracing_subscriber::EnvFilter;
@@ -23,8 +21,7 @@ struct MyBehaviour {
     dcutr: libp2p::dcutr::Behaviour,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+pub async fn run_chat() -> Result<(), Box<dyn Error>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .try_init();
@@ -74,7 +71,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Dialing remote peer via relay at: {remote_addr}");
 
     let mut stdin = io::BufReader::new(io::stdin()).lines();
-
     println!("Enter messages to send via Gossipsub:");
 
     loop {
