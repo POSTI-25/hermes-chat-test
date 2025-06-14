@@ -5,33 +5,28 @@ use futures::{executor::block_on, future::FutureExt, stream::StreamExt};
 use libp2p::{
     core::multiaddr::{Multiaddr, Protocol},
     dcutr, identify, identity, noise, ping, relay,
-    swarm::{NetworkBehaviour, SwarmEvent},
+    swarm::{NetworkBehaviour, Swarm, SwarmEvent},
     tcp, yamux, PeerId,
 };
 use tracing_subscriber::EnvFilter;
 
-#[derive(Debug, Parser)] 
-#[command(name = "libp2p DCUtR client")]
-struct Opts {
-    /// The mode (client-listen, client-dial).
+#[derive(Debug, Parser)]
+pub struct Opts {
     #[arg(long)]
-    mode: Mode,
+    pub mode: Mode,
 
-    /// Fixed value to generate deterministic peer id.
     #[arg(long)]
-    secret_key_seed: u8,
+    pub secret_key_seed: u8,
 
-    /// The listening address
     #[arg(long)]
-    relay_address: Multiaddr,
+    pub relay_address: Multiaddr,
 
-    /// Peer ID of the remote peer to hole punch to.
     #[arg(long)]
-    remote_peer_id: Option<PeerId>,
+    pub remote_peer_id: Option<PeerId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Parser)]
-enum Mode {
+pub enum Mode {
     Dial,
     Listen,
 }
@@ -47,21 +42,18 @@ impl FromStr for Mode {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+#[derive(NetworkBehaviour)]
+struct Behaviour {
+    relay_client: relay::client::Behaviour,
+    ping: ping::Behaviour,
+    identify: identify::Behaviour,
+    dcutr: dcutr::Behaviour,
+}
+
+pub async fn run(opts: Opts) -> Result<Swarm<Behaviour>, Box<dyn Error>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .try_init();
-
-    let opts = Opts::parse();
-
-    #[derive(NetworkBehaviour)]
-    struct Behaviour {
-        relay_client: relay::client::Behaviour,
-        ping: ping::Behaviour,
-        identify: identify::Behaviour,
-        dcutr: dcutr::Behaviour,
-    }
 
     let mut swarm =
         libp2p::SwarmBuilder::with_existing_identity(generate_ed25519(opts.secret_key_seed))
@@ -92,7 +84,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .listen_on("/ip4/0.0.0.0/tcp/0".parse().unwrap())
         .unwrap();
 
-    // Wait to listen on all interfaces.
     block_on(async {
         let mut delay = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse();
         loop {
@@ -105,30 +96,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         event => panic!("{event:?}"),
                     }
                 }
-                _ = delay => {
-                    // Likely listening on all interfaces now, thus continuing by breaking the loop.
-                    break;
-                }
+                _ = delay => break,
             }
         }
     });
 
-    // Connect to the relay server. Not for the reservation or relayed connection, but to (a) learn
-    // our local public address and (b) enable a freshly started relay to learn its public address.
     swarm.dial(opts.relay_address.clone()).unwrap();
+
     block_on(async {
         let mut learned_observed_addr = false;
         let mut told_relay_observed_addr = false;
 
         loop {
             match swarm.next().await.unwrap() {
-                SwarmEvent::NewListenAddr { .. } => {}
-                SwarmEvent::Dialing { .. } => {}
-                SwarmEvent::ConnectionEstablished { .. } => {}
-                SwarmEvent::Behaviour(BehaviourEvent::Ping(_)) => {}
-                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Sent {
-                    ..
-                })) => {
+                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Sent { .. })) => {
                     tracing::info!("Told relay its public address");
                     told_relay_observed_addr = true;
                 }
@@ -139,7 +120,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     tracing::info!(address=%observed_addr, "Relay told us our observed address");
                     learned_observed_addr = true;
                 }
-                event => panic!("{event:?}"),
+                _ => {}
             }
 
             if learned_observed_addr && told_relay_observed_addr {
@@ -165,45 +146,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    block_on(async {
-        loop {
-            match swarm.next().await.unwrap() {
-                SwarmEvent::NewListenAddr { address, .. } => {
-                    tracing::info!(%address, "Listening on address");
-                }
-                SwarmEvent::Behaviour(BehaviourEvent::RelayClient(
-                    relay::client::Event::ReservationReqAccepted { .. },
-                )) => {
-                    assert!(opts.mode == Mode::Listen);
-                    tracing::info!("Relay accepted our reservation request");
-                }
-                SwarmEvent::Behaviour(BehaviourEvent::RelayClient(event)) => {
-                    tracing::info!(?event)
-                }
-                SwarmEvent::Behaviour(BehaviourEvent::Dcutr(event)) => {
-                    tracing::info!(?event)
-                }
-                SwarmEvent::Behaviour(BehaviourEvent::Identify(event)) => {
-                    tracing::info!(?event)
-                }
-                SwarmEvent::Behaviour(BehaviourEvent::Ping(_)) => {}
-                SwarmEvent::ConnectionEstablished {
-                    peer_id, endpoint, ..
-                } => {
-                    tracing::info!(peer=%peer_id, ?endpoint, "Established new connection");
-                }
-                SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                    tracing::info!(peer=?peer_id, "Outgoing connection failed: {error}");
-                }
-                _ => {}
-            }
-        }
-    })
+    Ok(swarm)
 }
 
 fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
     let mut bytes = [0u8; 32];
     bytes[0] = secret_key_seed;
-
     identity::Keypair::ed25519_from_bytes(bytes).expect("only errors on wrong length")
 }
