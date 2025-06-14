@@ -5,7 +5,7 @@ use futures::{executor::block_on, future::FutureExt, stream::StreamExt};
 use libp2p::{
     core::multiaddr::{Multiaddr, Protocol},
     dcutr, identify, identity, noise, ping, relay,
-    swarm::{NetworkBehaviour, SwarmEvent},
+    swarm::{NetworkBehaviour, SwarmEvent, Swarm},
     tcp, yamux, PeerId,
 };
 use tracing_subscriber::EnvFilter;
@@ -13,19 +13,15 @@ use tracing_subscriber::EnvFilter;
 #[derive(Debug, Parser)]
 #[command(name = "libp2p DCUtR client")]
 pub struct Opts {
-    /// The mode (client-listen, client-dial).
     #[arg(long)]
     pub mode: Mode,
 
-    /// Fixed value to generate deterministic peer id.
     #[arg(long)]
     pub secret_key_seed: u8,
 
-    /// The listening address
     #[arg(long)]
     pub relay_address: Multiaddr,
 
-    /// Peer ID of the remote peer to hole punch to.
     #[arg(long)]
     pub remote_peer_id: Option<PeerId>,
 }
@@ -47,25 +43,21 @@ impl FromStr for Mode {
     }
 }
 
-// New public entry point
-pub async fn start() -> Result<(), Box<dyn Error>> {
+#[derive(NetworkBehaviour)]
+    pub struct Behaviour {
+        pub relay_client: relay::client::Behaviour,
+        pub ping: ping::Behaviour,
+        pub identify: identify::Behaviour,
+        pub dcutr: dcutr::Behaviour,
+    }
+
+pub async fn run(opts: Opts) -> Result<(Swarm<Behaviour>, PeerId), Box<dyn Error>> {
+
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .try_init();
 
-    let opts = Opts::parse();
-    run_dcutr(opts).await
-}
-
-// Original logic moved here, untouched
-async fn run_dcutr(opts: Opts) -> Result<(), Box<dyn Error>> {
-    #[derive(NetworkBehaviour)]
-    struct Behaviour {
-        relay_client: relay::client::Behaviour,
-        ping: ping::Behaviour,
-        identify: identify::Behaviour,
-        dcutr: dcutr::Behaviour,
-    }
+    
 
     let mut swarm =
         libp2p::SwarmBuilder::with_existing_identity(generate_ed25519(opts.secret_key_seed))
@@ -96,7 +88,6 @@ async fn run_dcutr(opts: Opts) -> Result<(), Box<dyn Error>> {
         .listen_on("/ip4/0.0.0.0/tcp/0".parse().unwrap())
         .unwrap();
 
-    // Wait to listen on all interfaces
     block_on(async {
         let mut delay = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse();
         loop {
@@ -116,7 +107,6 @@ async fn run_dcutr(opts: Opts) -> Result<(), Box<dyn Error>> {
         }
     });
 
-    // Connect to relay
     swarm.dial(opts.relay_address.clone()).unwrap();
     block_on(async {
         let mut learned_observed_addr = false;
@@ -198,11 +188,16 @@ async fn run_dcutr(opts: Opts) -> Result<(), Box<dyn Error>> {
                 _ => {}
             }
         }
-    })
+    });
+
+    let local_peer_id = swarm.local_peer_id().clone();
+Ok((swarm, local_peer_id))
+
 }
 
 fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
     let mut bytes = [0u8; 32];
     bytes[0] = secret_key_seed;
+
     identity::Keypair::ed25519_from_bytes(bytes).expect("only errors on wrong length")
 }
