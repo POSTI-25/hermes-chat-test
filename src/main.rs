@@ -8,6 +8,9 @@ use clap::Parser;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opts = Opts::parse();
     let (swarm, peer_id) = run(opts).await?;
+    println!("Swarm running with PeerId: {}", peer_id);
+    // println!("Listening on: {:?}", swarm.listeners());
+
     
     // lets opts
     // Call chat functionality here

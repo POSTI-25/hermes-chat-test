@@ -51,7 +51,7 @@ impl FromStr for Mode {
         pub dcutr: dcutr::Behaviour,
     }
 
-pub async fn run(opts: Opts) -> Result<(Swarm<Behaviour>, PeerId), Box<dyn Error>> {
+pub async fn run(opts: Opts) -> Result<(Swarm<Behaviour>, PeerId, ), Box<dyn Error>> {
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
@@ -191,7 +191,7 @@ pub async fn run(opts: Opts) -> Result<(Swarm<Behaviour>, PeerId), Box<dyn Error
     });
 
     let local_peer_id = swarm.local_peer_id().clone();
-Ok((swarm, local_peer_id))
+    Ok((swarm, local_peer_id))
 
 }
 
