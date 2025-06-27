@@ -1,3 +1,25 @@
+// Copyright 2021 Protocol Labs.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the "Software"),
+// to deal in the Software without restriction, including without limitation
+// the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+// DEALINGS IN THE SOFTWARE.
+
+// #![doc = include_str!("../README.md")]
+
 use std::{error::Error, str::FromStr};
 
 use clap::Parser;
@@ -5,29 +27,33 @@ use futures::{executor::block_on, future::FutureExt, stream::StreamExt};
 use libp2p::{
     core::multiaddr::{Multiaddr, Protocol},
     dcutr, identify, identity, noise, ping, relay,
-    swarm::{NetworkBehaviour, SwarmEvent, Swarm},
+    swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, PeerId,
 };
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(name = "libp2p DCUtR client")]
-pub struct Opts {
+struct Opts {
+    /// The mode (client-listen, client-dial).
     #[arg(long)]
-    pub mode: Mode,
+    mode: Mode,
 
+    /// Fixed value to generate deterministic peer id.
     #[arg(long)]
-    pub secret_key_seed: u8,
+    secret_key_seed: u8,
 
+    /// The listening address
     #[arg(long)]
-    pub relay_address: Multiaddr,
+    relay_address: Multiaddr,
 
+    /// Peer ID of the remote peer to hole punch to.
     #[arg(long)]
-    pub remote_peer_id: Option<PeerId>,
+    remote_peer_id: Option<PeerId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Parser)]
-pub enum Mode {
+enum Mode {
     Dial,
     Listen,
 }
@@ -43,21 +69,21 @@ impl FromStr for Mode {
     }
 }
 
-#[derive(NetworkBehaviour)]
-    pub struct Behaviour {
-        pub relay_client: relay::client::Behaviour,
-        pub ping: ping::Behaviour,
-        pub identify: identify::Behaviour,
-        pub dcutr: dcutr::Behaviour,
-    }
-
-pub async fn run(opts: Opts) -> Result<(Swarm<Behaviour>, PeerId, ), Box<dyn Error>> {
-
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .try_init();
 
-    
+    let opts = Opts::parse();
+
+    #[derive(NetworkBehaviour)]
+    struct Behaviour {
+        relay_client: relay::client::Behaviour,
+        ping: ping::Behaviour,
+        identify: identify::Behaviour,
+        dcutr: dcutr::Behaviour,
+    }
 
     let mut swarm =
         libp2p::SwarmBuilder::with_existing_identity(generate_ed25519(opts.secret_key_seed))
@@ -88,6 +114,7 @@ pub async fn run(opts: Opts) -> Result<(Swarm<Behaviour>, PeerId, ), Box<dyn Err
         .listen_on("/ip4/0.0.0.0/tcp/0".parse().unwrap())
         .unwrap();
 
+    // Wait to listen on all interfaces.
     block_on(async {
         let mut delay = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse();
         loop {
@@ -101,12 +128,15 @@ pub async fn run(opts: Opts) -> Result<(Swarm<Behaviour>, PeerId, ), Box<dyn Err
                     }
                 }
                 _ = delay => {
+                    // Likely listening on all interfaces now, thus continuing by breaking the loop.
                     break;
                 }
             }
         }
     });
 
+    // Connect to the relay server. Not for the reservation or relayed connection, but to (a) learn
+    // our local public address and (b) enable a freshly started relay to learn its public address.
     swarm.dial(opts.relay_address.clone()).unwrap();
     block_on(async {
         let mut learned_observed_addr = false;
@@ -118,7 +148,9 @@ pub async fn run(opts: Opts) -> Result<(Swarm<Behaviour>, PeerId, ), Box<dyn Err
                 SwarmEvent::Dialing { .. } => {}
                 SwarmEvent::ConnectionEstablished { .. } => {}
                 SwarmEvent::Behaviour(BehaviourEvent::Ping(_)) => {}
-                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Sent { .. })) => {
+                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Sent {
+                    ..
+                })) => {
                     tracing::info!("Told relay its public address");
                     told_relay_observed_addr = true;
                 }
@@ -188,11 +220,7 @@ pub async fn run(opts: Opts) -> Result<(Swarm<Behaviour>, PeerId, ), Box<dyn Err
                 _ => {}
             }
         }
-    });
-
-    let local_peer_id = swarm.local_peer_id().clone();
-    Ok((swarm, local_peer_id))
-
+    })
 }
 
 fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
