@@ -219,6 +219,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Clone the relay address outside the loop to avoid borrow checker issues inside select!
     // let relay_address = opts.relay_address.clone();
+    let relay_addr_with_circuit = relay_address;
 
     // Main event loop
     loop {
